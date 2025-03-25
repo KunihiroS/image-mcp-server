@@ -182,15 +182,15 @@ class ImageAnalysisServer {
         const imageBuffer = Buffer.from(response.data);
         console.error(`元の画像サイズ: ${imageBuffer.length / 1024} KB`);
         
-        // 画像を縮小（最大幅1024px、最大高さ1024px）
+        // 画像を縮小（最大幅512px、最大高さ512px）
         const resizedImageBuffer = await sharp(imageBuffer)
           .resize({
-            width: 1024,
-            height: 1024,
+            width: 512,
+            height: 512,
             fit: 'inside',
             withoutEnlargement: true
           })
-          .jpeg({ quality: 80 }) // JPEGに変換して品質を80%に設定
+          .jpeg({ quality: 60 }) // JPEGに変換して品質を60%に設定
           .toBuffer();
         
         console.error(`縮小後の画像サイズ: ${resizedImageBuffer.length / 1024} KB`);
