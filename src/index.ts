@@ -131,31 +131,64 @@ class ImageAnalysisServer {
 
   // 画像URLが有効かチェックするメソッド
   private async validateImageUrl(url: string): Promise<void> {
-    try {
-      // GETリクエストを使用して画像を取得（HEADの代わりに）
-      // タイムアウト設定を60秒に増加
-      const response = await axios.get(url, {
-        timeout: 60000, // 60秒
-        responseType: 'arraybuffer', // バイナリデータとして取得
-        maxContentLength: 10 * 1024 * 1024, // 10MBの最大サイズ制限
-      });
-      
-      const contentType = response.headers['content-type'];
-      
-      if (!contentType || !contentType.startsWith('image/')) {
-        throw new Error(`URLが画像ではありません: ${contentType}`);
-      }
-    } catch (error) {
-      if (axios.isAxiosError(error)) {
-        if (error.code === 'ECONNABORTED') {
-          throw new Error('画像URLへのリクエストがタイムアウトしました。別の画像URLを試すか、後でもう一度お試しください。');
+    // リトライ回数と待機時間の設定
+    const maxRetries = 3;
+    const retryDelay = 2000; // 2秒
+    
+    // URLからドメインを抽出
+    const urlObj = new URL(url);
+    const domain = urlObj.hostname;
+    
+    // ドメインに基づいてタイムアウト設定を調整
+    let timeout = 60000; // デフォルト: 60秒
+    if (domain.includes('gyazo.com')) {
+      timeout = 120000; // gyazo.com: 120秒
+    }
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.error(`画像URL検証: 試行 ${attempt}/${maxRetries} - ${url}`);
+        
+        // GETリクエストを使用して画像を取得
+        const response = await axios.get(url, {
+          timeout: timeout,
+          responseType: 'arraybuffer', // バイナリデータとして取得
+          maxContentLength: 10 * 1024 * 1024, // 10MBの最大サイズ制限
+          headers: {
+            // 一般的なブラウザのユーザーエージェントを設定
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            // 参照元を設定
+            'Referer': 'https://www.google.com/'
+          }
+        });
+        
+        const contentType = response.headers['content-type'];
+        
+        if (!contentType || !contentType.startsWith('image/')) {
+          throw new Error(`URLが画像ではありません: ${contentType}`);
         }
-        if (error.response) {
-          throw new Error(`画像URLにアクセスできません: HTTPステータス ${error.response.status}`);
+        
+        // 成功した場合はループを抜ける
+        return;
+      } catch (error) {
+        // 最後の試行でエラーが発生した場合はエラーをスロー
+        if (attempt === maxRetries) {
+          if (axios.isAxiosError(error)) {
+            if (error.code === 'ECONNABORTED') {
+              throw new Error(`画像URLへのリクエストがタイムアウトしました（${timeout/1000}秒）。別の画像URLを試すか、後でもう一度お試しください。`);
+            }
+            if (error.response) {
+              throw new Error(`画像URLにアクセスできません: HTTPステータス ${error.response.status}`);
+            }
+            throw new Error(`画像URLにアクセスできません: ${error.message}`);
+          }
+          throw error;
         }
-        throw new Error(`画像URLにアクセスできません: ${error.message}`);
+        
+        // リトライ前に待機
+        console.error(`画像URL検証エラー（リトライ中）: ${error instanceof Error ? error.message : String(error)}`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
-      throw error;
     }
   }
 
