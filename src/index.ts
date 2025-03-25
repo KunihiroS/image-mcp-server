@@ -23,6 +23,7 @@ if (!OPENAI_API_KEY) {
 // OpenAIクライアントの初期化
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY,
+  timeout: 120000, // 120秒のグローバルタイムアウト設定
 });
 
 // 画像URLの引数の型チェック
@@ -131,10 +132,14 @@ class ImageAnalysisServer {
   // 画像URLが有効かチェックするメソッド
   private async validateImageUrl(url: string): Promise<void> {
     try {
-      // タイムアウト設定を30秒に設定
-      const response = await axios.head(url, {
-        timeout: 30000, // 30秒
+      // GETリクエストを使用して画像を取得（HEADの代わりに）
+      // タイムアウト設定を60秒に増加
+      const response = await axios.get(url, {
+        timeout: 60000, // 60秒
+        responseType: 'arraybuffer', // バイナリデータとして取得
+        maxContentLength: 10 * 1024 * 1024, // 10MBの最大サイズ制限
       });
+      
       const contentType = response.headers['content-type'];
       
       if (!contentType || !contentType.startsWith('image/')) {
@@ -145,6 +150,9 @@ class ImageAnalysisServer {
         if (error.code === 'ECONNABORTED') {
           throw new Error('画像URLへのリクエストがタイムアウトしました。別の画像URLを試すか、後でもう一度お試しください。');
         }
+        if (error.response) {
+          throw new Error(`画像URLにアクセスできません: HTTPステータス ${error.response.status}`);
+        }
         throw new Error(`画像URLにアクセスできません: ${error.message}`);
       }
       throw error;
@@ -154,7 +162,7 @@ class ImageAnalysisServer {
   // GPT-4-turboで画像を分析するメソッド
   private async analyzeImageWithGpt4(imageUrl: string): Promise<string> {
     try {
-      // OpenAI APIリクエストにタイムアウト設定を追加
+      // OpenAI APIリクエスト
       const response = await openai.chat.completions.create({
         model: 'gpt-4-turbo',
         messages: [
@@ -171,8 +179,6 @@ class ImageAnalysisServer {
           },
         ],
         max_tokens: 1000,
-      }, {
-        timeout: 60000, // 60秒のタイムアウト設定
       });
 
       return response.choices[0]?.message?.content || '分析結果を取得できませんでした。';
