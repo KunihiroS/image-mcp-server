@@ -10,6 +10,10 @@ import {
 import { OpenAI } from 'openai';
 import axios from 'axios';
 import * as dotenv from 'dotenv';
+import sharp from 'sharp';
+import * as os from 'os';
+import * as path from 'path';
+import * as fs from 'fs';
 
 // .envファイルから環境変数を読み込む
 dotenv.config();
@@ -101,10 +105,16 @@ class ImageAnalysisServer {
 
       try {
         // 画像URLが有効かチェック
-        await this.validateImageUrl(imageUrl);
+        const imageBuffer = await this.fetchAndResizeImage(imageUrl);
+        
+        // 一時ファイルに保存して新しいURLを作成
+        const resizedImageUrl = await this.saveImageToTempFile(imageBuffer);
         
         // GPT-4-turboで画像を分析
-        const analysis = await this.analyzeImageWithGpt4(imageUrl);
+        const analysis = await this.analyzeImageWithGpt4(resizedImageUrl);
+
+        // 一時ファイルを削除
+        this.cleanupTempFile(resizedImageUrl);
 
         return {
           content: [
@@ -129,8 +139,8 @@ class ImageAnalysisServer {
     });
   }
 
-  // 画像URLが有効かチェックするメソッド
-  private async validateImageUrl(url: string): Promise<void> {
+  // 画像を取得して縮小するメソッド
+  private async fetchAndResizeImage(url: string): Promise<Buffer> {
     // リトライ回数と待機時間の設定
     const maxRetries = 3;
     const retryDelay = 2000; // 2秒
@@ -147,7 +157,7 @@ class ImageAnalysisServer {
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        console.error(`画像URL検証: 試行 ${attempt}/${maxRetries} - ${url}`);
+        console.error(`画像取得: 試行 ${attempt}/${maxRetries} - ${url}`);
         
         // GETリクエストを使用して画像を取得
         const response = await axios.get(url, {
@@ -168,8 +178,24 @@ class ImageAnalysisServer {
           throw new Error(`URLが画像ではありません: ${contentType}`);
         }
         
-        // 成功した場合はループを抜ける
-        return;
+        // 画像を縮小
+        const imageBuffer = Buffer.from(response.data);
+        console.error(`元の画像サイズ: ${imageBuffer.length / 1024} KB`);
+        
+        // 画像を縮小（最大幅1024px、最大高さ1024px）
+        const resizedImageBuffer = await sharp(imageBuffer)
+          .resize({
+            width: 1024,
+            height: 1024,
+            fit: 'inside',
+            withoutEnlargement: true
+          })
+          .jpeg({ quality: 80 }) // JPEGに変換して品質を80%に設定
+          .toBuffer();
+        
+        console.error(`縮小後の画像サイズ: ${resizedImageBuffer.length / 1024} KB`);
+        
+        return resizedImageBuffer;
       } catch (error) {
         // 最後の試行でエラーが発生した場合はエラーをスロー
         if (attempt === maxRetries) {
@@ -186,9 +212,36 @@ class ImageAnalysisServer {
         }
         
         // リトライ前に待機
-        console.error(`画像URL検証エラー（リトライ中）: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`画像取得エラー（リトライ中）: ${error instanceof Error ? error.message : String(error)}`);
         await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
+    }
+    
+    // この行は実行されないはずですが、TypeScriptのエラーを回避するために追加
+    throw new Error('画像の取得に失敗しました');
+  }
+
+  // 画像を一時ファイルに保存するメソッド
+  private async saveImageToTempFile(imageBuffer: Buffer): Promise<string> {
+    const tempDir = os.tmpdir();
+    const fileName = `image-${Date.now()}.jpg`;
+    const filePath = path.join(tempDir, fileName);
+    
+    await fs.promises.writeFile(filePath, imageBuffer);
+    
+    // ファイルURLを返す
+    return `file://${filePath}`;
+  }
+
+  // 一時ファイルを削除するメソッド
+  private cleanupTempFile(fileUrl: string): void {
+    try {
+      // file:// プレフィックスを削除
+      const filePath = fileUrl.replace('file://', '');
+      fs.unlinkSync(filePath);
+      console.error(`一時ファイルを削除しました: ${filePath}`);
+    } catch (error) {
+      console.error(`一時ファイルの削除に失敗しました: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
